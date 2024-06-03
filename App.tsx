@@ -1,117 +1,301 @@
-/**
- * Sample React Native App
- * https://github.com/facebook/react-native
- *
- * @format
- */
-
-import React from 'react';
-import type {PropsWithChildren} from 'react';
+import React, { useEffect, useState } from 'react';
 import {
-  SafeAreaView,
-  ScrollView,
-  StatusBar,
-  StyleSheet,
   Text,
-  useColorScheme,
-  View,
+  SafeAreaView,
+  View, 
+  ScrollView,
+  StyleSheet,
+  TouchableOpacity,
+  Modal,
+  TextInput,
 } from 'react-native';
-
+import GetLocation from 'react-native-get-location';
+import NetInfo from '@react-native-community/netinfo';
 import {
-  Colors,
-  DebugInstructions,
-  Header,
-  LearnMoreLinks,
-  ReloadInstructions,
-} from 'react-native/Libraries/NewAppScreen';
+  initDatabase,
+  insertLocation,
+  getLocations,
+  deleteLocation,
+  clearLocations,
+} from './database';
 
-type SectionProps = PropsWithChildren<{
-  title: string;
-}>;
+const App = () => {
+  const [list, setList] = useState([]);
+  const [selectedItem, setSelectedItem] = useState(null);
+  const [modalVisible, setModalVisible] = useState(false);
+  const [newLatitude, setNewLatitude] = useState('');
+  const [newLongitude, setNewLongitude] = useState('');
 
-function Section({children, title}: SectionProps): JSX.Element {
-  const isDarkMode = useColorScheme() === 'dark';
-  return (
-    <View style={styles.sectionContainer}>
-      <Text
-        style={[
-          styles.sectionTitle,
-          {
-            color: isDarkMode ? Colors.white : Colors.black,
-          },
-        ]}>
-        {title}
-      </Text>
-      <Text
-        style={[
-          styles.sectionDescription,
-          {
-            color: isDarkMode ? Colors.light : Colors.dark,
-          },
-        ]}>
-        {children}
-      </Text>
-    </View>
-  );
-}
+  // interval = syncTime * 60000;
 
-function App(): JSX.Element {
-  const isDarkMode = useColorScheme() === 'dark';
+  useEffect(() => {
+    initDatabase();
+    const interval = setInterval(() => {
+      handleAddData();
+    }, 10000); 
 
-  const backgroundStyle = {
-    backgroundColor: isDarkMode ? Colors.darker : Colors.lighter,
+    return () => clearInterval(interval);
+  }, []);
+
+  const handleAddData = async () => {
+    try {
+      const location = await GetLocation.getCurrentPosition({
+        enableHighAccuracy: true,
+        timeout: 10000,
+      });
+
+      const latitude = location.latitude;
+      const longitude = location.longitude;
+      const currentDate = new Date();
+      const datetime = currentDate.toLocaleString();
+
+      const isConnected = await checkInternetConnection();
+      
+      if (isConnected) {
+        await syncDataWithApi();
+        await sendDataToApi({ datetime, latitude, longitude });
+        getData();
+      } else {
+        await sendDataToLocalDatabase({ datetime, latitude, longitude });
+      }
+    } catch (error) {
+      console.log(error);
+    }
+  };
+
+  const checkInternetConnection = async () => {
+    return await NetInfo.fetch().then((state) => state.isConnected);
+  };
+
+  const sendDataToApi = async (data) => {
+    try {
+      await fetch('https://6639cbd81ae792804beccbdc.mockapi.io/location/v1/users', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(data),
+      });
+    } catch (error) {
+      console.log(error);
+    }
+  };
+
+  const sendDataToLocalDatabase = async (data) => {
+    try {
+      await insertLocation(data);
+    } catch (error) {
+      console.log(error);
+    }
+  };
+
+  const syncDataWithApi = async () => {
+    try {
+      const locations = await getLocations();
+      
+      if (locations.length > 0) {
+        await Promise.all(locations.map(async (location) => {
+          await sendDataToApi(location);
+          await deleteLocation(location.id);
+          clearLocations();
+        }));
+      }
+    } catch (error) {
+      console.log(error);
+    }
+  };
+
+  const getData = () => {
+    fetch('https://6639cbd81ae792804beccbdc.mockapi.io/location/v1/users', {
+      method: 'GET',
+    })
+      .then((res) => res.json())
+      .then((res) => {
+        setList(res);
+      })
+      .catch((err) => {
+        console.log(err);
+      });
+  };
+
+  const deleteData = (id) => {
+    fetch(`https://6639cbd81ae792804beccbdc.mockapi.io/location/v1/users/${id}`, {
+      method: 'DELETE',
+    })
+      .then(() => {
+        getData();
+      })
+      .catch((err) => {
+        console.log(err);
+      });
+  };
+
+  const updateData = () => {
+    const { id } = selectedItem;
+    fetch(`https://6639cbd81ae792804beccbdc.mockapi.io/location/v1/users/${id}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ latitude: newLatitude, longitude: newLongitude }),
+    }).then(() => {
+      setModalVisible(false);
+      setNewLatitude('');
+      setNewLongitude('');
+      getData();
+    }).catch((err) => {
+      console.log(err);
+    });
   };
 
   return (
-    <SafeAreaView style={backgroundStyle}>
-      <StatusBar
-        barStyle={isDarkMode ? 'light-content' : 'dark-content'}
-        backgroundColor={backgroundStyle.backgroundColor}
-      />
-      <ScrollView
-        contentInsetAdjustmentBehavior="automatic"
-        style={backgroundStyle}>
-        <Header />
-        <View
-          style={{
-            backgroundColor: isDarkMode ? Colors.black : Colors.white,
-          }}>
-          <Section title="Step One">
-            Edit <Text style={styles.highlight}>App.tsx</Text> to change this
-            screen and then come back to see your edits.
-          </Section>
-          <Section title="See Your Changes">
-            <ReloadInstructions />
-          </Section>
-          <Section title="Debug">
-            <DebugInstructions />
-          </Section>
-          <Section title="Learn More">
-            Read the docs to discover what to do next:
-          </Section>
-          <LearnMoreLinks />
-        </View>
+    <SafeAreaView>
+      <View style={styles.header}>
+        <Text style={styles.headerText}>List Data</Text>
+        <TouchableOpacity onPress={handleAddData} style={styles.addButton}>
+          <Text style={styles.addButtonText}>Add Data</Text>
+        </TouchableOpacity>
+      </View>
+      <ScrollView>
+        {list.map((item, index) => (
+          <View key={index} style={styles.itemContainer}>
+            <View style={styles.itemTextContainer}>
+              <Text style={styles.itemDate}>DATE   : {item.datetime}</Text>
+              <Text>LAT       : {item.latitude}</Text>
+              <Text>LONG    : {item.longitude}</Text>
+            </View>
+            <View style={styles.buttonContainer}>
+              <TouchableOpacity onPress={() => {
+                setSelectedItem(item);
+                setModalVisible(true);
+              }}>
+                <Text style={styles.updateText}>Update</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => deleteData(item.id)}>
+                <Text style={styles.deleteText}>Delete</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ))}
       </ScrollView>
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={modalVisible}
+        onRequestClose={() => {
+          setModalVisible(!modalVisible);
+        }}>
+        <View style={styles.modalContainer}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalDate}>DATE: {selectedItem?.datetime}</Text>
+            <Text>LAT: {selectedItem?.latitude}</Text>
+            <Text>LONG: {selectedItem?.longitude}</Text>
+            <TouchableOpacity onPress={() => {
+              setNewLatitude((Math.random() * 90).toString());
+              setNewLongitude((Math.random() * 180).toString());
+            }}>
+              <Text style={styles.changeDataText}>Change Data</Text>
+            </TouchableOpacity>
+            <TextInput
+              style={styles.input}
+              onChangeText={setNewLatitude}
+              value={newLatitude}
+              placeholder="New Latitude"
+            />
+            <TextInput
+              style={styles.input}
+              onChangeText={setNewLongitude}
+              value={newLongitude}
+              placeholder="New Longitude"
+              />
+            <TouchableOpacity onPress={updateData}>
+              <Text style={styles.updateDataText}>Update Data</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
-}
+};
 
 const styles = StyleSheet.create({
-  sectionContainer: {
-    marginTop: 32,
-    paddingHorizontal: 24,
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 10,
+    backgroundColor: '#f0f0f0',
   },
-  sectionTitle: {
-    fontSize: 24,
-    fontWeight: '600',
+  headerText: {
+    fontSize: 20,
+    fontWeight: 'bold',
+  },   
+  addButton: {
+    padding: 5,
+    backgroundColor: 'green',
+    borderRadius: 5,
   },
-  sectionDescription: {
-    marginTop: 8,
-    fontSize: 18,
-    fontWeight: '400',
+  addButtonText: {
+    color: 'white',
+    fontWeight: 'bold',
   },
-  highlight: {
-    fontWeight: '700',
+  itemContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#ddd',
+  },
+  itemTextContainer: {
+    flex: 1,
+  },
+  itemDate: {
+    fontSize: 15,
+    fontWeight: 'bold',
+  },
+  buttonContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  updateText: {
+    color: 'blue',
+    marginRight: 10,
+  },
+  deleteText: {
+    color: 'red',
+  },
+  modalContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+  },
+  modalContent: {
+    backgroundColor: 'white',
+    padding: 20,
+    borderRadius: 10,
+    elevation: 5,
+  },
+  modalDate: {
+    fontWeight: 'bold',
+    marginBottom: 10,
+  },
+  changeDataText: {
+    color: 'blue',
+    marginBottom: 10,
+    textAlign: 'center',
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 5,
+    padding: 5,
+    marginBottom: 10,
+  },
+  updateDataText: {
+    color: 'green',
+    textAlign: 'center',
   },
 });
 
